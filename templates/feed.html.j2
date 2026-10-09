@@ -8,13 +8,28 @@
 
 {% if session.get('user_id') %}
 <div class="col-md-8 mx-auto mb-4">
-  <div class="card shadow-sm">
+  <div class="card shadow-sm">a
     <div class="card-body">
       <h5 class="card-title">Create a new post</h5>
       <form action="{{ url_for('add_post') }}" method="POST">
         <div class="mb-3">
           <textarea class="form-control" name="content" rows="3" placeholder="What's on your mind, {{ session.get('username') }}?" required></textarea>
         </div>
+        <div id="norm-reminder" style="display:none; color:#d93025; background:#fce8e6; padding:8px; border-radius:5px; margin-top:8px; font-size:14px;">
+  ⚠️ <b>Design Claim 20:</b> Reminder - This word may violate community norms. Please rephrase before posting.
+</div>
+
+<script>
+  const forbiddenWords = ["damn", "stupid", "idiot", "spam", "hate"];
+  const postBox = document.querySelector("textarea[name='content']");
+  const reminder = document.getElementById("norm-reminder");
+  if(postBox){
+    postBox.addEventListener("input", function() {
+      let t = this.value.toLowerCase();
+      reminder.style.display = forbiddenWords.some(w => t.includes(w)) ? "block" : "none";
+    });
+  }
+</script>
         <button type="submit" class="btn btn-primary float-end">Post</button>
       </form>
     </div>
