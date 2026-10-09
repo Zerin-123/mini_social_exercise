@@ -8,7 +8,7 @@
 
 {% if session.get('user_id') %}
 <div class="col-md-8 mx-auto mb-4">
-  <div class="card shadow-sm">a
+  <div class="card shadow-sm">
     <div class="card-body">
       <h5 class="card-title">Create a new post</h5>
       <form action="{{ url_for('add_post') }}" method="POST">
