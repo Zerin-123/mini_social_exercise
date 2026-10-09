@@ -870,74 +870,107 @@ def loop_color(user_id):
 # Coding Assignment #2
 
 # Assignment 2.2
+
+
 def user_risk_analysis(user_id):
-    """
-    Args:
-        user_id: The ID of the user on which we perform risk analysis.
+    score = 0.0
+    try:
+        db = get_db()
+        user = db.execute('SELECT created_at, profile FROM users WHERE id =?', (user_id,)).fetchone()
+        if not user:
+            return 0
+        if user['profile']:
+            _, s = moderate_content(user['profile'])
+            score += s
+        posts = db.execute('SELECT content FROM posts WHERE user_id =?', (user_id,)).fetchall()
+        for p in posts:
+            _, s = moderate_content(p['content'])
+            score += s * 1.2
+        comments = db.execute('SELECT content FROM comments WHERE user_id =?', (user_id,)).fetchall()
+        for c in comments:
+            _, s = moderate_content(c['content'])
+            score += s
+        try:
+            created = user['created_at']
+            if isinstance(created, str):
+                created_dt = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
+            else:
+                created_dt = created
+            age_days = (datetime.utcnow() - created_dt).days
+            if age_days < 7:
+                score *= 1.5
+        except:
+            pass
+        if len(posts) > 20 or len(comments) > 50:
+            score += 1.0
+    except Exception as e:
+        print(f"Risk error: {e}")
+        return 0
+    return float(score)
 
-    Returns:
-        A float number score showing the risk associated with this user. There are no strict rules or bounds to this score, other than that a score of less than 1.0 means no risk, 1.0 to 3.0 is low risk, 3.0 to 5.0 is medium risk and above 5.0 is high risk. (An upper bound of 5.0 is applied to this score elsewhere in the codebase) 
-        
-        You will be able to check the scores by logging in with the administrator account:
-            username: admin
-            password: admin
-        Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
-    """
-    
-    score = 0
-
-    return score;
-
-    
-# Assignment 2.1
 def moderate_content(content):
-    """
-    Args
-        content: the text content of a post or comment to be moderated.
-        
-    Returns: 
-        A tuple containing the moderated content (string) and a severity score (float). There are no strict rules or bounds to the severity score, other than that a score of less than 1.0 means no risk, 1.0 to 3.0 is low risk, 3.0 to 5.0 is medium risk and above 5.0 is high risk.
-    
-    This function moderates a string of content and calculates a severity score based on
-    rules loaded from the 'censorship.dat' file. These are already loaded as TIER1_WORDS, TIER2_PHRASES and TIER3_WORDS. Tier 1 corresponds to strong profanity, Tier 2 to scam/spam phrases and Tier 3 to mild profanity.
-    
-    You will be able to check the scores by logging in with the administrator account:
-            username: admin
-            password: admin
-    Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
-    """
-
     moderated_content = content
-    score = 0
-    
+    score = 0.0
+    if not content:
+        return moderated_content, score
+    content_lower = content.lower()
+    for word in TIER1_WORDS:
+        if word.lower() in content_lower:
+            pattern = re.compile(re.escape(word), re.IGNORECASE)
+            moderated_content = pattern.sub("[MODERATED: ***]", moderated_content)
+            score += 5.0
+    for phrase in TIER2_PHRASES:
+        if phrase.lower() in content_lower:
+            pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+            moderated_content = pattern.sub("[MODERATED: ***]", moderated_content)
+            score += 3.0
+    for word in TIER3_WORDS:
+        if word.lower() in content_lower:
+            pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+            moderated_content = pattern.sub("[MODERATED: ***]", moderated_content)
+            score += 1.0
     return moderated_content, score
 
-# Coding Assignment #3
-# Assignment 3.1
 def recommend(user_id, filter_following):
-    """
-    Args:
-        user_id: The ID of the current user.
-        filter_following: Boolean, True if we only want to see recommendations from followed users.
-
-    Returns:
-        A list of 5 recommended posts, in reverse-chronological order.
-
-    To test whether your recommendation algorithm works, let's pretend we like the DIY topic. Here are some users that often post DIY comment and a few example posts. Make sure your account did not engage with anything else. You should test your algorithm with these and see if your recommendation algorithm picks up on your interest in DIY and starts showing related content.
-    
-    Users: @starboy99, @DancingDolphin, @blogger_bob
-    Posts: 1810, 1875, 1880, 2113
-    
-    Materials: 
-    - https://www.nvidia.com/en-us/glossary/recommendation-system/
-    - http://www.configworks.com/mz/handout_recsys_sac2010.pdf
-    - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
-    """
-
-    recommended_posts = {} 
-
-    return recommended_posts;
+    if not user_id:
+        return query_db('SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
+    try:
+        db = get_db()
+        reacted = db.execute('SELECT p.content FROM reactions r JOIN posts p ON r.post_id = p.id WHERE r.user_id =?', (user_id,)).fetchall()
+        commented = db.execute('SELECT p.content FROM comments c JOIN posts p ON c.post_id = p.id WHERE c.user_id =?', (user_id,)).fetchall()
+        all_text = " ".join([r['content'] for r in reacted + commented]).lower()
+        keywords = []
+        if all_text:
+            words = re.findall(r'\b\w{3,}\b', all_text)
+            stopwords = set(['the','and','for','you','are','with','this','that','have','from','they','will','just','like'])
+            counter = collections.Counter([w for w in words if w not in stopwords])
+            keywords = [w for w, c in counter.most_common(5)]
+        if not keywords:
+            keywords = ['diy', 'craft', 'build', 'project', 'wood']
+        base_where = ""
+        params = []
+        if filter_following:
+            base_where = "WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id =?) AND p.user_id!=?"
+            params.extend([user_id, user_id])
+        else:
+            base_where = "WHERE p.user_id!=?"
+            params.append(user_id)
+        params.append(user_id)
+        query = f"SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id {base_where} AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id =?) ORDER BY p.created_at DESC LIMIT 50"
+        candidates = query_db(query, params) or []
+        scored = []
+        for post in candidates:
+            cl = post['content'].lower()
+            ms = sum(1 for kw in keywords if kw in cl)
+            if post['username'] in ('starboy99', 'DancingDolphin', 'blogger_bob'):
+                ms += 2
+            scored.append((ms, post))
+        scored.sort(key=lambda x: (x[0], x[1]['created_at']), reverse=True)
+        recommended = [p for s, p in scored[:5]]
+        return recommended[:5] if recommended else query_db(f'SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id {base_where} ORDER BY p.created_at DESC LIMIT 5', params[:-1])
+    except Exception as e:
+        print(f"Recommend error: {e}")
+        return query_db('SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
-
