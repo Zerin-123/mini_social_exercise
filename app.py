@@ -873,64 +873,97 @@ def loop_color(user_id):
 
 
 def user_risk_analysis(user_id):
-    score = 0.0
     try:
         db = get_db()
         user = db.execute('SELECT created_at, profile FROM users WHERE id =?', (user_id,)).fetchone()
         if not user:
-            return 0
+            return 0.0
+
+        profile_score = 0.0
         if user['profile']:
-            _, s = moderate_content(user['profile'])
-            score += s
+            profile_score = moderate_content(user['profile'])[1]
+
         posts = db.execute('SELECT content FROM posts WHERE user_id =?', (user_id,)).fetchall()
-        for p in posts:
-            _, s = moderate_content(p['content'])
-            score += s * 1.2
+        avg_post = 0.0
+        if posts:
+            s = 0
+            for p in posts:
+                s += moderate_content(p['content'])[1]
+            avg_post = s / len(posts)
+
         comments = db.execute('SELECT content FROM comments WHERE user_id =?', (user_id,)).fetchall()
-        for c in comments:
-            _, s = moderate_content(c['content'])
-            score += s
-        try:
-            created = user['created_at']
-            if isinstance(created, str):
-                created_dt = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
-            else:
-                created_dt = created
-            age_days = (datetime.utcnow() - created_dt).days
-            if age_days < 7:
-                score *= 1.5
-        except:
-            pass
-        if len(posts) > 20 or len(comments) > 50:
-            score += 1.0
-    except Exception as e:
-        print(f"Risk error: {e}")
-        return 0
-    return float(score)
+        avg_comment = 0.0
+        if comments:
+            s2 = 0
+            for c in comments:
+                s2 += moderate_content(c['content'])[1]
+            avg_comment = s2 / len(comments)
+
+        content_risk = (profile_score * 1) + (avg_post * 3) + (avg_comment * 1)
+
+        from datetime import datetime
+        created = user['created_at']
+        if isinstance(created, str):
+            created_dt = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
+        else:
+            created_dt = created
+        days = (datetime.utcnow() - created_dt).days
+        if days < 7:
+            risk = content_risk * 1.5
+        elif days < 30:
+            risk = content_risk * 1.2
+        else:
+            risk = content_risk
+
+        if risk > 5.0:
+            risk = 5.0
+        return float(risk)
+    except:
+        return 0.0
 
 def moderate_content(content):
     moderated_content = content
     score = 0.0
     if not content:
         return moderated_content, score
+
     content_lower = content.lower()
+
     for word in TIER1_WORDS:
         if word.lower() in content_lower:
             pattern = re.compile(re.escape(word), re.IGNORECASE)
-            moderated_content = pattern.sub("[MODERATED: ***]", moderated_content)
+            moderated_content = pattern.sub('*' * len(word), moderated_content)
             score += 5.0
+
     for phrase in TIER2_PHRASES:
         if phrase.lower() in content_lower:
             pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-            moderated_content = pattern.sub("[MODERATED: ***]", moderated_content)
+            moderated_content = pattern.sub('*' * len(phrase), moderated_content)
             score += 3.0
-    for word in TIER3_WORDS:
-        if word.lower() in content_lower:
-            pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
-            moderated_content = pattern.sub("[MODERATED: ***]", moderated_content)
-            score += 1.0
-    return moderated_content, score
 
+    for word in TIER3_WORDS:
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+        found = pattern.findall(content)
+        if found:
+            moderated_content = pattern.sub(lambda m: '*' * len(m.group()), moderated_content)
+            score += 2.0 * len(found)
+
+    url_pattern = re.compile(r'https?://\S+|www\.\S+')
+    links = url_pattern.findall(content)
+    if links:
+        moderated_content = url_pattern.sub('[link removed]', moderated_content)
+        score = score + (2.0 * len(links))
+
+    only_letters = [c for c in content if c.isalpha()]
+    if len(only_letters) > 15:
+        upper_count = 0
+        for c in only_letters:
+            if c.isupper():
+                upper_count += 1
+        if len(only_letters) > 0 and upper_count / len(only_letters) > 0.7:
+            score += 0.5
+
+    return moderated_content, score
 def recommend(user_id, filter_following):
     if not user_id:
         return query_db('SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
