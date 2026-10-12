@@ -875,32 +875,41 @@ def loop_color(user_id):
 def user_risk_analysis(user_id):
     try:
         db = get_db()
-        user = db.execute('SELECT created_at, profile FROM users WHERE id =?', (user_id,)).fetchone()
+        user = db.execute('SELECT created_at, profile FROM users WHERE id=?', (user_id,)).fetchone()
         if not user:
             return 0.0
 
+        # profile score
         profile_score = 0.0
         if user['profile']:
-            profile_score = moderate_content(user['profile'])[1]
+            _, profile_score = moderate_content(user['profile'])
 
-        posts = db.execute('SELECT content FROM posts WHERE user_id =?', (user_id,)).fetchall()
-        avg_post = 0.0
+        # average post score
+        posts = db.execute('SELECT content FROM posts WHERE user_id=?', (user_id,)).fetchall()
         if posts:
-            s = 0
+            total_p = 0.0
             for p in posts:
-                s += moderate_content(p['content'])[1]
-            avg_post = s / len(posts)
+                _, s = moderate_content(p['content'])
+                total_p += s
+            avg_post = total_p / len(posts)
+        else:
+            avg_post = 0.0
 
-        comments = db.execute('SELECT content FROM comments WHERE user_id =?', (user_id,)).fetchall()
-        avg_comment = 0.0
+        # average comment score
+        comments = db.execute('SELECT content FROM comments WHERE user_id=?', (user_id,)).fetchall()
         if comments:
-            s2 = 0
+            total_c = 0.0
             for c in comments:
-                s2 += moderate_content(c['content'])[1]
-            avg_comment = s2 / len(comments)
+                _, s = moderate_content(c['content'])
+                total_c += s
+            avg_comment = total_c / len(comments)
+        else:
+            avg_comment = 0.0
 
+        # posts count most: profile*1 + avg_post*3 + avg_comment*1
         content_risk = (profile_score * 1) + (avg_post * 3) + (avg_comment * 1)
 
+        # newer accounts higher multiplier
         from datetime import datetime
         created = user['created_at']
         if isinstance(created, str):
@@ -909,58 +918,53 @@ def user_risk_analysis(user_id):
             created_dt = created
         days = (datetime.utcnow() - created_dt).days
         if days < 7:
-            risk = content_risk * 1.5
+            content_risk *= 1.5
         elif days < 30:
-            risk = content_risk * 1.2
-        else:
-            risk = content_risk
+            content_risk *= 1.2
 
-        if risk > 5.0:
-            risk = 5.0
-        return float(risk)
-    except:
+        if content_risk > 5.0:
+            content_risk = 5.0
+        return float(content_risk)
+    except Exception as e:
+        print(f"Risk error: {e}")
         return 0.0
 
 def moderate_content(content):
+    if not content:
+        return "", 0.0
+
     moderated_content = content
     score = 0.0
-    if not content:
-        return moderated_content, score
-
     content_lower = content.lower()
 
+    # Slide 12 rule: Tier1 severe or Tier2 spam -> whole removed, 5.0
     for word in TIER1_WORDS:
         if word.lower() in content_lower:
-            pattern = re.compile(re.escape(word), re.IGNORECASE)
-            moderated_content = pattern.sub('*' * len(word), moderated_content)
-            score += 5.0
-
+            return "[removed]", 5.0
     for phrase in TIER2_PHRASES:
         if phrase.lower() in content_lower:
-            pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-            moderated_content = pattern.sub('*' * len(phrase), moderated_content)
-            score += 3.0
+            return "[removed]", 5.0
 
+    # Tier3 mild -> masked with ***** +2.0 each
     for word in TIER3_WORDS:
         pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
         found = pattern.findall(content)
         if found:
-            moderated_content = pattern.sub(lambda m: '*' * len(m.group()), moderated_content)
+            moderated_content = pattern.sub("*****", moderated_content)
             score += 2.0 * len(found)
 
+    # Link -> [link removed] +2.0
     url_pattern = re.compile(r'https?://\S+|www\.\S+')
     links = url_pattern.findall(content)
     if links:
-        moderated_content = url_pattern.sub('[link removed]', moderated_content)
-        score = score + (2.0 * len(links))
+        moderated_content = url_pattern.sub("[link removed]", moderated_content)
+        score += 2.0 * len(links)
 
+    # Mostly CAPITALS -> +0.5
     only_letters = [c for c in content if c.isalpha()]
     if len(only_letters) > 15:
-        upper_count = 0
-        for c in only_letters:
-            if c.isupper():
-                upper_count += 1
-        if len(only_letters) > 0 and upper_count / len(only_letters) > 0.7:
+        upper = sum(1 for c in only_letters if c.isupper())
+        if upper / len(only_letters) > 0.7:
             score += 0.5
 
     return moderated_content, score
