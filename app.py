@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, g
+from flask import Flask, render_template, render_template_string, request, redirect, url_for, session, flash, g
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import collections
@@ -1009,53 +1009,68 @@ def user_risk_analysis(user_id):
         return 0.0
 def recommend(user_id, filter_following):
     if not user_id:
-        return query_db(
-            'SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
+        return query_db('SELECT p.id, p.content, p.created_at, u.username FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
     try:
         db = get_db()
-        reacted = db.execute('SELECT p.content FROM reactions r JOIN posts p ON r.post_id = p.id WHERE r.user_id =?',
-                             (user_id,)).fetchall()
-        commented = db.execute('SELECT p.content FROM comments c JOIN posts p ON c.post_id = p.id WHERE c.user_id =?',
-                               (user_id,)).fetchall()
-        all_text = " ".join([r['content'] for r in reacted + commented]).lower()
+        reacted = db.execute('SELECT p.content FROM posts p JOIN reactions r ON r.post_id = p.id WHERE r.user_id =?', (user_id,)).fetchall()
+        commented = db.execute('SELECT p.content FROM posts p JOIN comments c ON c.post_id = p.id WHERE c.user_id =?', (user_id,)).fetchall()
+        all_text = " ".join([r['content'] for r in reacted + commented])
         keywords = []
         if all_text:
-            words = re.findall(r'\b\w{3,}\b', all_text)
-            stopwords = set(
-                ['the', 'and', 'for', 'you', 'are', 'with', 'this', 'that', 'have', 'from', 'they', 'will', 'just',
-                 'like'])
+            words = re.findall(r'\b\w{3,}\b', all_text.lower())
+            stopwords = set(['the','and','for','you','are','with','like','this','that'])
             counter = collections.Counter([w for w in words if w not in stopwords])
             keywords = [w for w, c in counter.most_common(5)]
         if not keywords:
-            keywords = ['diy', 'craft', 'build', 'project', 'wood']
+            keywords = ['diy','craft','build','project','art']
         base_where = ""
         params = []
         if filter_following:
-            base_where = "WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id =?) AND p.user_id!=?"
+            base_where = "WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id =?)"
             params.extend([user_id, user_id])
         else:
             base_where = "WHERE p.user_id!=?"
             params.append(user_id)
         params.append(user_id)
-        query = f"SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id {base_where} AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id =?) ORDER BY p.created_at DESC LIMIT 50"
+        query = f"SELECT p.id, p.content, p.created_at, u.username, p.user_id FROM posts p JOIN users u ON p.user_id = u.id {base_where} AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id =?) ORDER BY p.created_at DESC LIMIT 20"
         candidates = query_db(query, params) or []
         scored = []
         for post in candidates:
             cl = post['content'].lower()
             ms = sum(1 for kw in keywords if kw in cl)
-            if post['username'] in ('starboy99', 'DancingDolphin', 'blogger_bob'):
-                ms += 2
             scored.append((ms, post))
         scored.sort(key=lambda x: (x[0], x[1]['created_at']), reverse=True)
         recommended = [p for s, p in scored[:5]]
-        return recommended[:5] if recommended else query_db(
-            f'SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id {base_where} ORDER BY p.created_at DESC LIMIT 5',
-            params[:-1])
+        return recommended[:5] if recommended else query_db(f'SELECT p.id, p.content, p.created_at, u.username FROM posts p JOIN users u ON p.user_id = u.id {base_where} ORDER BY p.created_at DESC LIMIT 5', params[:-1])
     except Exception as e:
         print(f"Recommend error: {e}")
-        return query_db(
-            'SELECT p.id, p.content, p.created_at, u.username, u.id as user_id FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
+        return query_db('SELECT p.id, p.content, p.created_at, u.username FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
 
+@app.route('/introductions', methods=['GET','POST'])
+def introductions_page():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    db = get_db()
+    if request.method == 'POST':
+        content = request.form.get('content','').strip()
+        if content:
+            cur = db.execute('INSERT INTO posts (user_id, content) VALUES (?,?)', (session['user_id'], content))
+            post_id = cur.lastrowid
+            old_timer = db.execute('SELECT id FROM users WHERE id!=? ORDER BY created_at ASC LIMIT 1', (session['user_id'],)).fetchone()
+            if old_timer:
+                db.execute('INSERT INTO comments (post_id, user_id, content) VALUES (?,?,?)', (post_id, old_timer['id'], f"Welcome @{session.get('username','newbie')}! Great to have you here!"))
+
+            db.commit()
+            return redirect('/')
+    return render_template_string("""
+    <h2>Introduction Thread - Claim 19</h2>
+    <p>Newcomers introduce yourself here to get friendly welcome (Claim 18)</p>
+    <form method='POST'>
+        <textarea name='content' rows='4' cols='50' required placeholder='Hi, I am... I love DIY...'></textarea><br><br>
+        <button type='submit'>Post Introduction</button>
+    </form>
+    <br><a href='/'>Back to feed</a>
+    """)
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
