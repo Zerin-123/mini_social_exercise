@@ -1046,22 +1046,26 @@ def recommend(user_id, filter_following):
         print(f"Recommend error: {e}")
         return query_db('SELECT p.id, p.content, p.created_at, u.username FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
 
-@app.route('/introductions', methods=['GET','POST'])
+@app.route('/introductions', methods=['GET', 'POST'])
 def introductions_page():
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return redirect('/login')
+
     db = get_db()
     if request.method == 'POST':
-        content = request.form.get('content','').strip()
+        content = request.form.get('content', '').strip()
         if content:
             cur = db.execute('INSERT INTO posts (user_id, content) VALUES (?,?)', (session['user_id'], content))
             post_id = cur.lastrowid
-            old_timer = db.execute('SELECT id FROM users WHERE id!=? ORDER BY created_at ASC LIMIT 1', (session['user_id'],)).fetchone()
-            if old_timer:
-                db.execute('INSERT INTO comments (post_id, user_id, content) VALUES (?,?,?)', (post_id, old_timer['id'], f"Welcome @{session.get('username','newbie')}! Great to have you here!"))
-
+            old_timer_row = db.execute('SELECT id FROM users WHERE id!=? ORDER BY created_at ASC LIMIT 1', (session['user_id'],)).fetchone()
+            if old_timer_row:
+                old_timer_id = old_timer_row[0]
+                db.execute('INSERT INTO comments (post_id, user_id, content) VALUES (?,?,?)', (post_id, old_timer_id, 'Welcome to the community! Great to have you here!'))
             db.commit()
-            return redirect('/')
+            return redirect('/introductions')
+
+    posts = db.execute('SELECT p.content, u.username FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.id DESC LIMIT 20').fetchall()
+
     return render_template_string("""
     <h2>Introduction Thread - Claim 19</h2>
     <p>Newcomers introduce yourself here to get friendly welcome (Claim 18)</p>
@@ -1069,8 +1073,11 @@ def introductions_page():
         <textarea name='content' rows='4' cols='50' required placeholder='Hi, I am... I love DIY...'></textarea><br><br>
         <button type='submit'>Post Introduction</button>
     </form>
+    <hr>
+    {% for p in posts %}
+      <p><b>{{ p[1] }}</b>: {{ p[0] }}</p>
+    {% endfor %}
     <br><a href='/'>Back to feed</a>
-    """)
-
+    """, posts=posts)
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
