@@ -79,6 +79,23 @@
     </div>
   </div>
 </div>
+<!-- C3 Claim 15: Top Contributors -->
+<div class="card mb-4 border-warning">
+  <div class="card-body">
+    <h5>🏆 Top Contributors (C3-Claim 15)</h5>
+    <small class="text-muted">Our most active members - status recognition</small>
+    <hr>
+    {% for user in top_contributors %}
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span><b>{{ user['username'] }}</b></span>
+        <span class="badge bg-warning text-dark">{{ user['total_posts'] }} posts</span>
+      </div>
+    {% else %}
+      <p>No contributors yet. Debug data: {{ top_contributors }}</p>
+    {% endfor %}
+  </div>
+</div>
+
 {% endif %}
 <h2 class="text-center border-bottom pb-2 mb-4"><span>Posts</span></h2>
 
