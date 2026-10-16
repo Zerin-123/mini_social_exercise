@@ -114,7 +114,39 @@ def feed():
 
     current_user_id = session.get('user_id')
     params = []
-
+    # --- STEP 1: C2 Claim 1 ---
+    needs_attention = []
+    active_today = []
+    if current_user_id:
+        try:
+            c2 = db.cursor()
+            c2.execute("""
+                SELECT p.id, p.content, u.username
+                FROM posts p
+                JOIN follows f ON p.user_id = f.followed_id
+                JOIN users u ON p.user_id = u.id
+                WHERE f.follower_id = ?
+                AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id = ?)
+                ORDER BY p.created_at DESC LIMIT 5
+            """, (current_user_id, current_user_id))
+            needs_attention = c2.fetchall()
+        except:
+            needs_attention = []
+            # --- STEP 2: C2 Claim 12 - Active Today ---
+            try:
+                c3 = db.cursor()
+                c3.execute("""
+                    SELECT u.username, COUNT(DISTINCT p.id) as posts, COUNT(DISTINCT r.id) as reactions
+                    FROM users u
+                    LEFT JOIN posts p ON p.user_id = u.id AND p.created_at >= datetime('now', '-1 day')
+                    LEFT JOIN reactions r ON r.user_id = u.id AND r.created_at >= datetime('now', '-1 day')
+                    GROUP BY u.id
+                    HAVING posts > 0 OR reactions > 0
+                    ORDER BY (posts + reactions) DESC LIMIT 5
+                """)
+                active_today = c3.fetchall()
+            except:
+                active_today = []
     #  2. Build the Query
     where_clause = ""
     if show == 'following' and current_user_id:
@@ -206,7 +238,11 @@ def feed():
                            page=page,  # Pass current page number
                            per_page=POSTS_PER_PAGE,  # Pass items per page
                            reaction_emojis=REACTION_EMOJIS,
-                           reaction_types=REACTION_TYPES)
+                           reaction_types=REACTION_TYPES,
+                           needs_attention=needs_attention,
+                           active_today=active_today)
+
+
 
 
 @app.route('/posts/new', methods=['POST'])
