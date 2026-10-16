@@ -8,7 +8,7 @@
 
 {% if session.get('user_id') %}
 <div class="col-md-8 mx-auto mb-4">
-  <div class="card shadow-sm">
+  <div class="card shadow-sm">a
     <div class="card-body">
       <h5 class="card-title">Create a new post</h5>
       <form action="{{ url_for('add_post') }}" method="POST">
@@ -36,7 +36,50 @@
   </div>
 </div>
 {% endif %}
-
+{% if session.get('user_id') %}
+<div class="col-md-8 mx-auto">
+  <!-- C2 Claim 1: Easily visible list of needed contributions -->
+  <div class="card mb-4 border-primary">
+    <div class="card-body">
+      <h5>📌 Needs Your Contribution (C2-Claim 1)</h5>
+      <small class="text-muted">Posts from people you follow where you haven't reacted yet</small>
+      <hr>
+      {% if needs_attention %}
+        {% for item in needs_attention %}
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span><b>{{ item.username }}:</b> {{ item.content[:60] }}...</span>
+            <a href="/posts/{{ item.id }}" class="btn btn-sm btn-primary">React Now</a>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="mb-0 text-muted">All caught up! No pending contributions.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% if session.get('user_id') %}
+<div class="col-md-8 mx-auto">
+  <!-- C2 Claim 12: Shows who's contributing - social proof -->
+  <div class="card mb-4 border-success">
+    <div class="card-body">
+      <h5>🔥 Active Today (C2-Claim 12)</h5>
+      <small class="text-muted">See who's contributing right now</small>
+      <hr>
+      {% if active_today %}
+        {% for user in active_today %}
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span><b>{{ user.username }}</b></span>
+            <span class="badge bg-success">{{ user.posts }} posts, {{ user.reactions }} reactions</span>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="mb-0 text-muted">No one active in last 24h. Be the first!</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
 <h2 class="text-center border-bottom pb-2 mb-4"><span>Posts</span></h2>
 
 <div class="mb-4 text-center">
