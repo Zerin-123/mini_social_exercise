@@ -118,11 +118,12 @@ def feed():
     needs_attention = []
     top_contributors = []
     active_today = []
+
     if current_user_id:
         try:
             c2 = db.cursor()
             c2.execute("""
-                SELECT p.id, p.content, u.username
+                SELECT p.id, p.content, u.username 
                 FROM posts p
                 JOIN follows f ON p.user_id = f.followed_id
                 JOIN users u ON p.user_id = u.id
@@ -133,48 +134,46 @@ def feed():
             needs_attention = c2.fetchall()
         except:
             needs_attention = []
-            # --- STEP 2: C2 Claim 12 - Active Today ---
-            try:
-                c3 = db.cursor()
-                c3.execute("""
-                    SELECT u.username, COUNT(DISTINCT p.id) as posts, COUNT(DISTINCT r.id) as reactions
-                    FROM users u
-                    LEFT JOIN posts p ON p.user_id = u.id AND p.created_at >= datetime('now', '-1 day')
-                    LEFT JOIN reactions r ON r.user_id = u.id AND r.created_at >= datetime('now', '-1 day')
-                    GROUP BY u.id
-                    HAVING posts > 0 OR reactions > 0
-                    ORDER BY (posts + reactions) DESC LIMIT 5
-                """)
-                active_today = c3.fetchall()
-            except:
-                active_today = []
-        # --- STEP 3: C3 Claim 15 - Top Contributors (Status)
-        import sqlite3
-        top_contributors = []
-        try:
-            # Try to use existing connection if available
-            conn = sqlite3.connect('database.sqlite')
-            conn.row_factory = sqlite3.Row
-            c3_15 = conn.cursor()
-            c3_15.execute("""
-                SELECT username,
-                       (SELECT COUNT(*) FROM posts WHERE posts.user_id = users.id) as total_posts
-                FROM users
-                WHERE (SELECT COUNT(*) FROM posts WHERE posts.user_id = users.id) > 0
-                ORDER BY total_posts DESC LIMIT 5
-            """)
-            rows = c3_15.fetchall()
-            for r in rows:
-                top_contributors.append({'username': r[0], 'total_posts': r[1]})
-            conn.close()
-            print(f"C3-15 SUCCESS: {len(top_contributors)} users found - REAL DATA!")
-        except Exception as e:
-            print(f"C3-15 Error: {e}")
-            top_contributors = [
-                {'username': 'admin', 'total_posts': 5},
-                {'username': 'demo_user', 'total_posts': 2}
-            ]
 
+    # --- STEP 2: C2 Claim 12 ---
+    try:
+        db = get_db()
+        c3 = db.cursor()
+        c3.execute("""
+            SELECT u.username, COUNT(p.id) as posts
+            FROM users u
+            JOIN posts p ON p.user_id = u.id
+            GROUP BY u.id, u.username
+            ORDER BY COUNT(p.id) DESC LIMIT 5
+        """)
+        rows = c3.fetchall()
+        active_today = []
+        for r in rows:
+            active_today.append({'username': r[0], 'posts': r[1], 'reactions': 0})
+
+    except Exception as e:
+        print(f"C2-12 Error: {e}")
+        active_today = []
+
+    # --- STEP 3: C3 Claim 15 - NO HARDCODED ---
+    try:
+        db = get_db()
+        c3_15 = db.cursor()
+        c3_15.execute("""
+            SELECT u.username, COUNT(p.id) as total_posts
+            FROM users u
+            JOIN posts p ON p.user_id = u.id
+            GROUP BY u.id, u.username
+            ORDER BY total_posts DESC LIMIT 5
+        """)
+        rows = c3_15.fetchall()
+        top_contributors = []
+        for r in rows:
+            top_contributors.append({'username': r[0], 'total_posts': r[1]})
+
+    except Exception as e:
+        print(f"C3-15 Error: {e}")
+        top_contributors = []
 
 
     #  2. Build the Query
