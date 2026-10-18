@@ -140,16 +140,19 @@ def feed():
         db = get_db()
         c3 = db.cursor()
         c3.execute("""
-            SELECT u.username, COUNT(p.id) as posts
+            SELECT u.username, 
+                   COUNT(DISTINCT p.id) as posts, 
+                   COUNT(r.id) as reactions
             FROM users u
-            JOIN posts p ON p.user_id = u.id
+            LEFT JOIN posts p ON p.user_id = u.id
+            LEFT JOIN reactions r ON r.post_id = p.id
             GROUP BY u.id, u.username
             ORDER BY COUNT(p.id) DESC LIMIT 5
         """)
         rows = c3.fetchall()
         active_today = []
         for r in rows:
-            active_today.append({'username': r[0], 'posts': r[1], 'reactions': 0})
+            active_today.append({'username': r[0], 'posts': r[1], 'reactions': r[2]})
 
     except Exception as e:
         print(f"C2-12 Error: {e}")
