@@ -158,12 +158,14 @@ def feed():
         print(f"C2-12 Error: {e}")
         active_today = []
 
-    # --- STEP 3: C3 Claim 15 - NO HARDCODED ---
+    # --- STEP 3: C3 Claim 15 - NO HARDCODED - Photos + Info + Recent Activities ---
     try:
         db = get_db()
         c3_15 = db.cursor()
         c3_15.execute("""
-            SELECT u.username, COUNT(p.id) as total_posts
+            SELECT u.username, u.id, COUNT(p.id) as total_posts, 
+                   MAX(p.created_at) as last_active,
+                   (SELECT p2.content FROM posts p2 WHERE p2.user_id = u.id ORDER BY p2.created_at DESC LIMIT 1) as recent_activity
             FROM users u
             JOIN posts p ON p.user_id = u.id
             GROUP BY u.id, u.username
@@ -172,7 +174,9 @@ def feed():
         rows = c3_15.fetchall()
         top_contributors = []
         for r in rows:
-            top_contributors.append({'username': r[0], 'total_posts': r[1]})
+            # NO HARDCODED - all from DB: r[0]=username, r[1]=id (for photo), r[2]=count, r[3]=last_active, r[4]=recent post
+            top_contributors.append(
+                {'username': r[0], 'user_id': r[1], 'total_posts': r[2], 'last_active': r[3], 'recent_activity': r[4]})
 
     except Exception as e:
         print(f"C3-15 Error: {e}")
