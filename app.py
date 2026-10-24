@@ -114,45 +114,82 @@ def feed():
 
     current_user_id = session.get('user_id')
     params = []
-    # --- STEP 1: C2 Claim 1 ---
+    # --- STEP 1: C2 Claim 1 (Needs Your Contribution) ---
+    # Design Claim 1: making the list of needed contributions easily visible.
+    # "Contribution" = reacting to or commenting on a post by someone you follow.
     needs_attention = []
     top_contributors = []
     active_today = []
 
+    # FIX: the DB connection must be opened BEFORE it is used.
+    # Previously `db` was undefined here, so a NameError was swallowed by a
+    # bare except and the list was always empty ("All caught up!").
+    db = get_db()
+
     if current_user_id:
         try:
             c2 = db.cursor()
+            # Posts from followed users that the current user has NOT yet
+            # reacted to AND NOT yet commented on.
             c2.execute("""
-                SELECT p.id, p.content, u.username 
+                SELECT p.id, p.content, u.username
                 FROM posts p
                 JOIN follows f ON p.user_id = f.followed_id
                 JOIN users u ON p.user_id = u.id
                 WHERE f.follower_id = ?
-                AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id = ?)
+                  AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id = ?)
+                  AND p.id NOT IN (SELECT post_id FROM comments WHERE user_id = ?)
                 ORDER BY p.created_at DESC LIMIT 5
-            """, (current_user_id, current_user_id))
-            needs_attention = c2.fetchall()
-        except:
+            """, (current_user_id, current_user_id, current_user_id))
+            # Convert to dicts and censor the text (moderate_content) so the
+            # widget never shows content that is hidden elsewhere on the site.
+            needs_attention = []
+            for row in c2.fetchall():
+                item = dict(row)
+                item['content'], _ = moderate_content(item['content'])
+                needs_attention.append(item)
+        except Exception as e:
+            print(f"C2-1 Error: {e}")
             needs_attention = []
 
-    # --- STEP 2: C2 Claim 12 ---
+    # --- STEP 2: C2 Claim 12 (Active Today) ---
+    # Shows the users who were most active TODAY only, counting what they
+    # DID today: posts written, comments written and reactions MADE by them.
+    # FIX 1: every count is filtered to today's date (date(created_at) = date('now')).
+    # FIX 2: reactions are counted by r.user_id (reactions made BY the user),
+    #        not by the reactions received on the user's posts.
     try:
         db = get_db()
         c3 = db.cursor()
-        c3.execute("""
-            SELECT u.username, 
-                   COUNT(DISTINCT p.id) as posts, 
-                   COUNT(r.id) as reactions
-            FROM users u
-            LEFT JOIN posts p ON p.user_id = u.id
-            LEFT JOIN reactions r ON r.post_id = p.id
-            GROUP BY u.id, u.username
-            ORDER BY COUNT(p.id) DESC LIMIT 5
+
+        # The reactions table needs a created_at column to know WHEN a reaction was made.
+        reaction_cols = [row[1] for row in db.execute("PRAGMA table_info(reactions)").fetchall()]
+        if 'created_at' in reaction_cols:
+            reactions_today_sql = ("(SELECT COUNT(*) FROM reactions r "
+                                   "WHERE r.user_id = u.id AND date(r.created_at) = date('now'))")
+        else:
+            print("C2-12 Warning: reactions table has no created_at column")
+            reactions_today_sql = "0"
+
+        c3.execute(f"""
+            SELECT username, posts, comments, reactions FROM (
+                SELECT u.username AS username,
+                       (SELECT COUNT(*) FROM posts p
+                         WHERE p.user_id = u.id AND date(p.created_at) = date('now')) AS posts,
+                       (SELECT COUNT(*) FROM comments c
+                         WHERE c.user_id = u.id AND date(c.created_at) = date('now')) AS comments,
+                       {reactions_today_sql} AS reactions
+                FROM users u
+            )
+            WHERE posts + comments + reactions > 0
+            ORDER BY (posts + comments + reactions) DESC, username ASC
+            LIMIT 5
         """)
         rows = c3.fetchall()
         active_today = []
         for r in rows:
-            active_today.append({'username': r[0], 'posts': r[1], 'reactions': r[2]})
+            active_today.append({'username': r[0], 'posts': r[1],
+                                 'comments': r[2], 'reactions': r[3]})
 
     except Exception as e:
         print(f"C2-12 Error: {e}")
@@ -175,8 +212,9 @@ def feed():
         top_contributors = []
         for r in rows:
             # NO HARDCODED - all from DB: r[0]=username, r[1]=id (for photo), r[2]=count, r[3]=last_active, r[4]=recent post
+            recent_clean, _ = moderate_content(r[4] or '')
             top_contributors.append(
-                {'username': r[0], 'user_id': r[1], 'total_posts': r[2], 'last_active': r[3], 'recent_activity': r[4]})
+                {'username': r[0], 'user_id': r[1], 'total_posts': r[2], 'last_active': r[3], 'recent_activity': recent_clean})
 
     except Exception as e:
         print(f"C3-15 Error: {e}")
