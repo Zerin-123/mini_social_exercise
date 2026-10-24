@@ -42,7 +42,7 @@
   <div class="card mb-4 border-primary">
     <div class="card-body">
       <h5>📌 Needs Your Contribution (C2-Claim 1)</h5>
-      <small class="text-muted">Posts from people you follow where you haven't reacted yet</small>
+      <small class="text-muted">Posts from people you follow that you haven't reacted to or commented on yet</small>
       <hr>
       {% if needs_attention %}
         {% for item in needs_attention %}
@@ -64,21 +64,22 @@
   <div class="card mb-4 border-success">
     <div class="card-body">
       <h5>🔥 Active Today (C2-Claim 12)</h5>
-      <small class="text-muted">See who's contributing right now</small>
+      <small class="text-muted">Who contributed today (posts and comments written, reactions given)</small>
       <hr>
       {% if active_today %}
         {% for user in active_today %}
           <div class="d-flex justify-content-between align-items-center mb-2">
             <span><b>{{ user.username }}</b></span>
-            <span class="badge bg-success">{{ user.posts }} posts, {{ user.reactions }} reactions</span>
+            <span class="badge bg-success">{{ user.posts }} posts, {{ user.comments }} comments, {{ user.reactions }} reactions</span>
           </div>
         {% endfor %}
       {% else %}
-        <p class="mb-0 text-muted">No one active in last 24h. Be the first!</p>
+        <p class="mb-0 text-muted">No one has been active yet today. Be the first!</p>
       {% endif %}
     </div>
   </div>
 </div>
+{% endif %}
 <!-- C3 Claim 15: Top Contributors -->
 <div class="card mb-4 border-warning">
   <div class="card-body">
@@ -103,7 +104,6 @@
     {% else %}
       <p>No contributors yet.</p>
     {% endfor %}
-{% endif %}
   </div>
 </div>
 
@@ -129,7 +129,7 @@
   </div>
    {% endif %}
 
-  
+
 </div>
 
 <div class="col-md-8 mx-auto">
@@ -146,7 +146,7 @@
           {% endif %}
         </h3>
 
-        
+
         {% if session.get('user_id') == entry.post.user_id %}
         <div class="d-flex align-items-center">
             <small class="text-muted me-3">{{ entry.post.created_at|datetimeformat }}</small>
@@ -160,7 +160,7 @@
         <small class="text-muted">{{ entry.post.created_at|datetimeformat }}</small>
         {% endif %}
       </div>
-      
+
       <p class="mt-2">{{ entry.post.content }}</p>
 
       <!-- Reactions Display and Add Reaction Button -->
@@ -226,7 +226,7 @@
               <strong><a href="/u/{{ comment.username }}">{{ user_display(comment.username) }}</a></strong>
               <p class="mb-0">{{ comment.content }}</p>
             </div>
-            
+
             {% if session.get('user_id') == comment.user_id or session.get('user_id') == entry.post.user_id %}
             <form action="{{ url_for('delete_comment', comment_id=comment.id) }}" method="POST" onsubmit="return confirm('Are you sure you want to delete this comment?');">
                 <button type="submit" class="btn btn-sm btn-danger" title="Delete Comment">delete</button>
@@ -247,7 +247,7 @@
       </div>
     </div>
   </div>
-  
+
 
   <div class="modal fade" id="addCommentModal-{{ entry.post.id }}" tabindex="-1" aria-labelledby="addCommentModalLabel-{{ entry.post.id }}" aria-hidden="true">
     <div class="modal-dialog">
