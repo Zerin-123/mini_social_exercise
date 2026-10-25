@@ -15,40 +15,43 @@
         <div class="mb-3">
           <textarea class="form-control" name="content" rows="3" placeholder="What's on your mind, {{ session.get('username') }}?" required></textarea>
         </div>
-        <div id="norm-reminder" style="display:none; color:#d93025; background:#fce8e6; padding:8px; border-radius:5px; margin-top:8px; font-size:14px;">
-  ⚠️ <b>Design Claim 20:</b> Reminder - This word may violate community norms. Please rephrase before posting.
-</div>
-
-<script>
-  const forbiddenWords = ["damn", "stupid", "idiot", "spam", "hate"];
-  const postBox = document.querySelector("textarea[name='content']");
-  const reminder = document.getElementById("norm-reminder");
-  if(postBox){
-    postBox.addEventListener("input", function() {
-      let t = this.value.toLowerCase();
-      reminder.style.display = forbiddenWords.some(w => t.includes(w)) ? "block" : "none";
-    });
-  }
-</script>
         <button type="submit" class="btn btn-primary float-end">Post</button>
       </form>
     </div>
   </div>
 </div>
 {% endif %}
+
 {% if session.get('user_id') %}
 <div class="col-md-8 mx-auto">
-  <!-- C2 Claim 1: Easily visible list of needed contributions -->
+  <!-- C2 Claim 1: easily visible list of needed contributions
+       C2 Claim 12: social proof (how many others already contributed) -->
   <div class="card mb-4 border-primary">
     <div class="card-body">
-      <h5>📌 Needs Your Contribution (C2-Claim 1)</h5>
+      <h5>📌 Needs Your Contribution (C2-Claim 1)
+        {% if needs_attention_total %}<span class="badge bg-primary">{{ needs_attention_total }} pending</span>{% endif %}
+      </h5>
       <small class="text-muted">Posts from people you follow that you haven't reacted to or commented on yet</small>
       <hr>
       {% if needs_attention %}
         {% for item in needs_attention %}
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <span><b>{{ item.username }}:</b> {{ item.content[:60] }}...</span>
-            <a href="/posts/{{ item.id }}" class="btn btn-sm btn-primary">React Now</a>
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+              <b>{{ item.username }}:</b> {{ item.content[:60] }}{% if item.content|length > 60 %}...{% endif %}<br>
+              <small class="text-success">
+                {{ reaction_emojis.get(reaction_types[0]) }} {{ item.reaction_count }} reactions ·
+                💬 {{ item.comment_count }} comments from others so far (C2-Claim 12)
+              </small>
+            </div>
+            <div class="d-flex gap-1">
+              <!-- one-click contribution: uses the existing /react route -->
+              <form action="{{ url_for('add_reaction') }}" method="POST" class="d-inline">
+                <input type="hidden" name="post_id" value="{{ item.id }}">
+                <input type="hidden" name="reaction" value="{{ reaction_types[0] }}">
+                <button type="submit" class="btn btn-sm btn-outline-primary">{{ reaction_emojis.get(reaction_types[0]) }} {{ reaction_types[0]|capitalize }}</button>
+              </form>
+              <a href="/posts/{{ item.id }}" class="btn btn-sm btn-primary">Comment</a>
+            </div>
           </div>
         {% endfor %}
       {% else %}
@@ -58,9 +61,9 @@
   </div>
 </div>
 {% endif %}
-{% if session.get('user_id') %}
+
 <div class="col-md-8 mx-auto">
-  <!-- C2 Claim 12: Shows who's contributing - social proof -->
+  <!-- C2 Claim 12: social proof, visible to everyone (also logged out visitors) -->
   <div class="card mb-4 border-success">
     <div class="card-body">
       <h5>🔥 Active Today (C2-Claim 12)</h5>
@@ -79,31 +82,34 @@
     </div>
   </div>
 </div>
-{% endif %}
-<!-- C3 Claim 15: Top Contributors -->
-<div class="card mb-4 border-warning">
-  <div class="card-body">
-    <h5>🏆 Top Contributors (C3-Claim 15)</h5>
-    <small class="text-muted">Our most active members - status recognition</small>
-    <hr>
-    {% for user in top_contributors %}
-    <div class="d-flex justify-content-between align-items-center mb-2">
-      <div class="d-flex align-items-center">
-        <!-- C3-Claim 15: Real photo displaying from username (dynamic, not hardcoded) -->
-        <img src="https://ui-avatars.com/api/?name={{ user['username'] }}&background=FFC107&color=000&size=64&bold=true" width="36" height="36" class="rounded-circle me-2" alt="{{ user['username'] }}">
-        <div>
-          <b>{{ user['username'] }}</b><br>
-          <small class="text-muted">{{ user['recent_activity'][:35] }}...</small>
+
+<div class="col-md-8 mx-auto">
+  <!-- C3 Claim 15: member avatar + info + recent activity (all from the database) -->
+  <div class="card mb-4 border-warning">
+    <div class="card-body">
+      <h5>🏆 Top Contributors (C3-Claim 15)</h5>
+      <small class="text-muted">Our most active members and what they posted recently</small>
+      <hr>
+      {% for user in top_contributors %}
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="d-flex align-items-center">
+          <!-- local avatar: colour comes from loop_color(user_id), no external service needed -->
+          <div class="rounded-circle d-flex align-items-center justify-content-center text-white fw-bold me-2"
+               style="width:36px;height:36px;background:{{ loop_color(user.user_id) }}">{{ user.username[0]|upper }}</div>
+          <div>
+            <a href="/u/{{ user.username }}"><b>{{ user.username }}</b></a><br>
+            <small class="text-muted">{{ user.recent_activity[:35] }}{% if user.recent_activity|length > 35 %}...{% endif %}</small>
+          </div>
+        </div>
+        <div class="text-end">
+          <span class="badge bg-warning text-dark">{{ user.total_posts }} posts</span><br>
+          <small style="font-size:10px">Last active: {{ user.last_active|datetimeformat }}</small>
         </div>
       </div>
-      <div class="text-end">
-        <span class="badge bg-warning text-dark">{{ user['total_posts'] }} posts</span><br>
-        <small style="font-size:10px">{{ user['last_active'] }}</small>
-      </div>
+      {% else %}
+        <p>No contributors yet.</p>
+      {% endfor %}
     </div>
-    {% else %}
-      <p>No contributors yet.</p>
-    {% endfor %}
   </div>
 </div>
 
@@ -214,9 +220,9 @@
      {% if entry.comments %}
       <hr>
       {% if entry.comments %}
-        <h6 class="mb-0">Comments ({{ entry.comments | count }})</h4>
+        <h6 class="mb-0">Comments ({{ entry.comments | count }})</h6>
       {% else %}
-        <h6 class="mb-0">Comments</h4>
+        <h6 class="mb-0">Comments</h6>
       {% endif %}
       <ul class="list-group list-group-flush shadow-none border-0">
         {% for comment in entry.comments[-2:] %}
