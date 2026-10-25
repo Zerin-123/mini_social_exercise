@@ -1,4 +1,4 @@
-from flask import Flask, render_template, render_template_string, request, redirect, url_for, session, flash, g
+from flask import Flask, render_template, render_template_string, request, redirect, url_for, session, flash, g, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import collections
@@ -135,90 +135,98 @@ def feed():
 
     current_user_id = session.get('user_id')
     params = []
-    # --- STEP 1: C2 Claim 1 (Needs Your Contribution) ---
-    # Design Claim 1: making the list of needed contributions easily visible.
-    # "Contribution" = reacting to or commenting on a post by someone you follow.
+
     needs_attention = []
+    needs_attention_total = 0
     top_contributors = []
     active_today = []
 
-    # FIX: the DB connection must be opened BEFORE it is used.
-    # Previously `db` was undefined here, so a NameError was swallowed by a
-    # bare except and the list was always empty ("All caught up!").
     db = get_db()
 
+    # --- STEP 1: C2 Claim 1 + C2 Claim 12 (Needs Your Contribution, with social proof) ---
+    # Design Claim 1: making the list of needed contributions easily visible.
+    # "Contribution" = reacting to or commenting on a post by someone you follow.
+    # Design Claim 12: people comply more when they see that others complied,
+    # so every pending item also shows how many reactions/comments it already has.
     if current_user_id:
         try:
-            c2 = db.cursor()
             # Posts from followed users that the current user has NOT yet
             # reacted to AND NOT yet commented on.
-            c2.execute("""
-                SELECT p.id, p.content, u.username
+            pending_from = """
                 FROM posts p
                 JOIN follows f ON p.user_id = f.followed_id
                 JOIN users u ON p.user_id = u.id
                 WHERE f.follower_id = ?
                   AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id = ?)
                   AND p.id NOT IN (SELECT post_id FROM comments WHERE user_id = ?)
-                ORDER BY p.created_at DESC LIMIT 5
-            """, (current_user_id, current_user_id, current_user_id))
-            # Convert to dicts and censor the text (moderate_content) so the
-            # widget never shows content that is hidden elsewhere on the site.
-            needs_attention = []
-            for row in c2.fetchall():
+            """
+            args = (current_user_id, current_user_id, current_user_id)
+
+            # Total number of pending contributions (shown as a counter badge)
+            needs_attention_total = db.execute("SELECT COUNT(*) " + pending_from, args).fetchone()[0]
+
+            rows = db.execute(
+                """SELECT p.id, p.content, u.username,
+                          (SELECT COUNT(*) FROM reactions r WHERE r.post_id = p.id) AS reaction_count,
+                          (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count """
+                + pending_from + " ORDER BY p.created_at DESC LIMIT 20", args).fetchall()
+
+            for row in rows:
                 item = dict(row)
+                # Censor the text (moderate_content) so the widget never shows
+                # content that is hidden elsewhere on the site.
                 item['content'], _ = moderate_content(item['content'])
+                if item['content'] == "[removed]":
+                    continue  # do not ask people to contribute to removed posts
                 needs_attention.append(item)
+                if len(needs_attention) == 5:
+                    break
         except Exception as e:
             print(f"C2-1 Error: {e}")
             needs_attention = []
+            needs_attention_total = 0
 
     # --- STEP 2: C2 Claim 12 (Active Today) ---
     # Shows the users who were most active TODAY only, counting what they
     # DID today: posts written, comments written and reactions MADE by them.
-    # FIX 1: every count is filtered to today's date (date(created_at) = date('now')).
-    # FIX 2: reactions are counted by r.user_id (reactions made BY the user),
-    #        not by the reactions received on the user's posts.
+    # Timestamps are stored in UTC, so both sides are converted to local time
+    # ('localtime') to make "today" match the user's own day.
     try:
-        db = get_db()
-        c3 = db.cursor()
-
         # The reactions table needs a created_at column to know WHEN a reaction was made.
         reaction_cols = [row[1] for row in db.execute("PRAGMA table_info(reactions)").fetchall()]
         if 'created_at' in reaction_cols:
-            reactions_today_sql = ("(SELECT COUNT(*) FROM reactions r "
-                                   "WHERE r.user_id = u.id AND date(r.created_at) = date('now'))")
+            reactions_today_sql = ("(SELECT COUNT(*) FROM reactions r WHERE r.user_id = u.id "
+                                   "AND date(r.created_at,'localtime') = date('now','localtime'))")
         else:
             print("C2-12 Warning: reactions table has no created_at column")
             reactions_today_sql = "0"
 
-        c3.execute(f"""
+        rows = db.execute(f"""
             SELECT username, posts, comments, reactions FROM (
                 SELECT u.username AS username,
                        (SELECT COUNT(*) FROM posts p
-                         WHERE p.user_id = u.id AND date(p.created_at) = date('now')) AS posts,
+                         WHERE p.user_id = u.id
+                           AND date(p.created_at,'localtime') = date('now','localtime')) AS posts,
                        (SELECT COUNT(*) FROM comments c
-                         WHERE c.user_id = u.id AND date(c.created_at) = date('now')) AS comments,
+                         WHERE c.user_id = u.id
+                           AND date(c.created_at,'localtime') = date('now','localtime')) AS comments,
                        {reactions_today_sql} AS reactions
                 FROM users u
             )
             WHERE posts + comments + reactions > 0
             ORDER BY (posts + comments + reactions) DESC, username ASC
             LIMIT 5
-        """)
-        rows = c3.fetchall()
-        active_today = []
-        for r in rows:
-            active_today.append({'username': r[0], 'posts': r[1],
-                                 'comments': r[2], 'reactions': r[3]})
+        """).fetchall()
+        active_today = [{'username': r[0], 'posts': r[1],
+                         'comments': r[2], 'reactions': r[3]} for r in rows]
 
     except Exception as e:
         print(f"C2-12 Error: {e}")
         active_today = []
 
-    # --- STEP 3: C3 Claim 15 - NO HARDCODED - Photos + Info + Recent Activities ---
+    # --- STEP 3: C3 Claim 15 - Info + Recent Activities of individual members ---
+    # Everything comes from the database (nothing hardcoded).
     try:
-        db = get_db()
         c3_15 = db.cursor()
         c3_15.execute("""
             SELECT u.username, u.id, COUNT(p.id) as total_posts, 
@@ -232,7 +240,7 @@ def feed():
         rows = c3_15.fetchall()
         top_contributors = []
         for r in rows:
-            # NO HARDCODED - all from DB: r[0]=username, r[1]=id (for photo), r[2]=count, r[3]=last_active, r[4]=recent post
+            # r[0]=username, r[1]=id (for avatar colour), r[2]=count, r[3]=last_active, r[4]=recent post
             recent_clean, _ = moderate_content(r[4] or '')
             top_contributors.append(
                 {'username': r[0], 'user_id': r[1], 'total_posts': r[2], 'last_active': r[3], 'recent_activity': recent_clean})
@@ -335,6 +343,7 @@ def feed():
                            reaction_emojis=REACTION_EMOJIS,
                            reaction_types=REACTION_TYPES,
                            needs_attention=needs_attention,
+                           needs_attention_total=needs_attention_total,
                            active_today=active_today,
                            top_contributors=top_contributors)
 
