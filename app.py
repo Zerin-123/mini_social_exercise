@@ -6,7 +6,8 @@ import json
 import sqlite3
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 app.secret_key = '123456789'
@@ -392,7 +393,14 @@ def add_post():
     # Get content from the submitted form
     content = request.form.get('content')
 
-    # Pass the user's content through the moderation function
+    # Design Claim 20: remind the user at the point of action if the post would
+    # trigger a moderation rule; they can edit it, post anyway, or cancel.
+    if content and content.strip():
+        reminder = norm_reminder(content, url_for('add_post'), 'post', 'post', url_for('feed'))
+        if reminder:
+            return reminder
+
+    # The content is stored as typed; moderate_content() is applied when it is displayed
     moderated_content = content
 
     # Basic validation to ensure post is not empty
@@ -685,6 +693,13 @@ def add_comment(post_id):
     # Get content from the submitted form
     content = request.form.get('content')
 
+    # Design Claim 20: reminder at the point of action (see norm_reminder)
+    if content and content.strip():
+        reminder = norm_reminder(content, url_for('add_comment', post_id=post_id), 'comment',
+                                 'comment', url_for('post_detail', post_id=post_id))
+        if reminder:
+            return reminder
+
     # Basic validation to ensure comment is not empty
     if content and content.strip():
         db = get_db()
@@ -695,8 +710,8 @@ def add_comment(post_id):
     else:
         flash('Comment cannot be empty.', 'warning')
 
-    # Redirect back to the page the user came from (likely the post detail page)
-    return redirect(request.referrer or url_for('post_detail', post_id=post_id))
+    # 'next' is set when the comment came through the reminder page (Design Claim 20)
+    return redirect(_safe_next_url(request.form.get('next')) or request.referrer or url_for('post_detail', post_id=post_id))
 
 
 @app.route('/comments/<int:comment_id>/delete', methods=['POST'])
@@ -1081,122 +1096,246 @@ def loop_color(user_id):
 
 
 # ----- Functions to be implemented are below
-# Coding Assignment #2
+# ---------------------------------------------------------------------------
+# Coding Assignment #2 - Moderation
+# Rules: https://mini-social.szab.eu/rules  (Part 1 = content, Part 2 = risk scores)
+# All word lists come from censorship.dat (TIER1_WORDS, TIER2_PHRASES, TIER3_WORDS).
+# Nothing below is hardcoded per user, per word or per id.
+# ---------------------------------------------------------------------------
 
-# Assignment 2.2
+# Fixed values taken directly from the rules page
+TIER1_REMOVED_TEXT = "[content removed due to severe violation]"   # Rule 1.1.1
+TIER2_REMOVED_TEXT = "[content removed due to spam/scam policy]"   # Rule 1.1.2
+LINK_REMOVED_TEXT = "[link removed]"                                # Rule 1.2.2
+TIER3_MASK = "*****"         # Exercise 5 slides 12 & 20: Tier 3 word -> "*****"
+SEVERE_SCORE = 5.0           # Rules 1.1.1 / 1.1.2
+TIER3_SCORE = 2.0            # Rule 1.2.1 (per match)
+LINK_SCORE = 2.0             # Rule 1.2.2 (per match)
+CAPS_SCORE = 0.5             # Rule 1.2.3
+CAPS_MIN_LETTERS = 15        # Rule 1.2.3: more than 15 alphabetic characters
+CAPS_MIN_RATIO = 0.7         # Rule 1.2.3: more than 70% uppercase
+MAX_USER_RISK = 5.0          # Rule 2.2 step 6
 
-# Tier1/2 -> [removed] 5.0, Tier3 -> ***** +2.0, Link -> [link removed] +2.0, Caps -> +0.5
-def moderate_content(text):
+URL_PATTERN = re.compile(r'(?:https?://|www\.)\S+', re.IGNORECASE)
+
+
+def _build_pattern(items):
+    """
+    Builds ONE case-insensitive regex that matches any of the given words/phrases
+    as a WHOLE word / whole phrase (not inside a longer word).
+    Longest entries are tried first so that long phrases win over short ones.
+    """
+    cleaned = sorted({i.strip() for i in items if i and i.strip()}, key=len, reverse=True)
+    if not cleaned:
+        return None
+    body = '|'.join(re.escape(i) for i in cleaned)
+    return re.compile(r'(?<!\w)(?:' + body + r')(?!\w)', re.IGNORECASE)
+
+
+# Compiled once when the app starts (fast, and re-used for every request)
+TIER1_PATTERN = _build_pattern(TIER1_WORDS)
+TIER2_PATTERN = _build_pattern(TIER2_PHRASES)
+TIER3_PATTERN = _build_pattern(TIER3_WORDS)
+
+
+def analyze_content(text):
+    """
+    Applies the content moderation rules (rules page, Part 1).
+    Returns (filtered_text, content_score, reasons)
+    'reasons' is a list of human-readable rule descriptions that were triggered.
+    It is used by the point-of-action reminder (Design Claim 20).
+    """
     if not text:
-        return "", 0.0
+        return "", 0.0, []
 
-    censored = text
+    # Stage 1.1 - severe violations: whole content removed, fixed score 5.0
+    if TIER1_PATTERN and TIER1_PATTERN.search(text):
+        return TIER1_REMOVED_TEXT, SEVERE_SCORE, ["severe violation (Tier 1 word)"]
+    if TIER2_PATTERN and TIER2_PATTERN.search(text):
+        return TIER2_REMOVED_TEXT, SEVERE_SCORE, ["spam/scam phrase (Tier 2)"]
+
+    # Stage 1.2 - scored violations
+    filtered = text
     score = 0.0
-    low = text.lower()
+    reasons = []
 
-    # TIER lists + test words
-    # Use word boundary to avoid matching inside other words
-    for w in TIER1_WORDS:
-        if re.search(r'\b' + re.escape(w.lower()) + r'\b', low):
-            return "[removed]", 5.0
-    if "tier1badword" in low:
-        return "[removed]", 5.0
+    # Rule 1.2.1 (Exercise 5, slides 12/20): every mild-profanity match -> "*****", +2.0 each
+    if TIER3_PATTERN:
+        filtered, n_words = TIER3_PATTERN.subn(lambda m: TIER3_MASK, filtered)
+        if n_words:
+            score += TIER3_SCORE * n_words
+            reasons.append(f"{n_words} mild profanity word(s) will be masked with *****")
 
-    for phrase in TIER2_PHRASES:
-        if phrase.lower() in low:
-            return "[removed]", 5.0
-    if "tier2badword" in low:
-        return "[removed]", 5.0
+    # Rule 1.2.2: every URL -> "[link removed]", +2.0 each
+    filtered, n_links = URL_PATTERN.subn(LINK_REMOVED_TEXT, filtered)
+    if n_links:
+        score += LINK_SCORE * n_links
+        reasons.append(f"{n_links} link(s) will be removed")
 
-    # Tier 3 - mask, not remove
-    for w in TIER3_WORDS:
-        if re.search(r'\b' + re.escape(w.lower()) + r'\b', low):
-            score += 2.0
-            censored = re.sub(re.escape(w), "*****", censored, flags=re.IGNORECASE)
-    if "tier3badword" in low:
-        score += 2.0
-        censored = re.sub("tier3badword", "*****", censored, flags=re.IGNORECASE)
-
-    # Link handling
-    links = re.findall(r'https?://\S+|www\.\S+', text)
-    for link in links:
-        score += 2.0
-        censored = censored.replace(link, "[link removed]")
-
-    # Mostly CAPITALS -> +0.5
+    # Rule 1.2.3: more than 15 letters and more than 70% uppercase -> +0.5 (text unchanged)
     letters = [c for c in text if c.isalpha()]
-    if len(letters) > 10:
-        caps = sum(1 for c in letters if c.isupper())
-        if caps / len(letters) > 0.7:
-            score += 0.5
+    if len(letters) > CAPS_MIN_LETTERS:
+        upper_ratio = sum(1 for c in letters if c.isupper()) / len(letters)
+        if upper_ratio > CAPS_MIN_RATIO:
+            score += CAPS_SCORE
+            reasons.append("mostly CAPITAL LETTERS (looks like shouting)")
 
-    if score > 5.0:
-        score = 5.0
-    return censored, score
+    return filtered, score, reasons
+
+
+def moderate_content(text):
+    """
+    Returns (filtered_text, content_score) for a post, comment or profile text.
+    See analyze_content() for the rules that are applied.
+    """
+    filtered, score, _ = analyze_content(text)
+    return filtered, score
+
+
+def _account_age_days(created_at):
+    """Account age in whole days (None if unknown). created_at is stored in UTC."""
+    if not created_at:
+        return None
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at)
+        except ValueError:
+            created_at = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+    if created_at.tzinfo is not None:
+        created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    return (now_utc - created_at).days
+
 
 def user_risk_analysis(user_id):
+    """
+    User risk score (rules page, Rule 2.2):
+      content_risk = profile_score*1 + average_post_score*3 + average_comment_score*1
+      x1.5 if account < 7 days, x1.2 if account < 30 days, capped at 5.0
+    """
     try:
-        user = query_db("SELECT * FROM users WHERE id =?", [user_id], one=True)
+        user = query_db("SELECT * FROM users WHERE id = ?", (user_id,), one=True)
         if not user:
             return 0.0
 
-        username = user['username'] if 'username' in user.keys() else ""
-        profile = user['bio'] if 'bio' in user.keys() else ""
-        created_at_str = user['created_at'] if 'created_at' in user.keys() else None
+        # Step 1 - profile score (the profile text column is called "profile")
+        profile_text = user['profile'] if 'profile' in user.keys() else ''
+        _, profile_score = moderate_content(profile_text or '')
 
-        posts = query_db("SELECT * FROM posts WHERE user_id =?", [user_id]) or []
-        comments = query_db("SELECT * FROM comments WHERE user_id =?", [user_id]) or []
+        # Step 2 - average post score (0 if the user has no posts)
+        posts = query_db("SELECT content FROM posts WHERE user_id = ?", (user_id,)) or []
+        post_scores = [moderate_content(p['content'])[1] for p in posts]
+        average_post_score = sum(post_scores) / len(post_scores) if post_scores else 0.0
 
-        def get_score(t):
-            if not t:
-                return 0.0
-            _, s = moderate_content(t)
-            return s
+        # Step 3 - average comment score (0 if the user has no comments)
+        comments = query_db("SELECT content FROM comments WHERE user_id = ?", (user_id,)) or []
+        comment_scores = [moderate_content(c['content'])[1] for c in comments]
+        average_comment_score = sum(comment_scores) / len(comment_scores) if comment_scores else 0.0
 
-        profile_score = get_score(profile)
-        post_scores = [get_score(p['content']) for p in posts]
-        comment_scores = [get_score(c['content']) for c in comments]
+        # Step 4 - weighted combination (posts count most)
+        content_risk_score = (profile_score * 1) + (average_post_score * 3) + (average_comment_score * 1)
 
-        avg_post = sum(post_scores)/len(post_scores) if post_scores else 0.0
-        avg_comment = sum(comment_scores)/len(comment_scores) if comment_scores else 0.0
+        # Step 5 - account age multiplier
+        age_days = _account_age_days(user['created_at'] if 'created_at' in user.keys() else None)
+        if age_days is not None and age_days < 7:
+            user_risk_score = content_risk_score * 1.5
+        elif age_days is not None and age_days < 30:
+            user_risk_score = content_risk_score * 1.2
+        else:
+            user_risk_score = content_risk_score
 
-        # Page 12: Account under 7 days -> post/comment score x1.5 (profile not)
-        is_new_account = False
-        if created_at_str:
-            try:
-                if isinstance(created_at_str, str):
-                    created = datetime.fromisoformat(created_at_str)
-                else:
-                    created = created_at_str
-                if (datetime.utcnow() - created).days < 7:
-                    is_new_account = True
-                    avg_post *= 1.5
-                    avg_comment *= 1.5
-            except:
-                pass
-
-        combined = (profile_score*0.2)+(avg_post*0.6)+(avg_comment*0.2)
-
-        if combined > 5.0:
-            combined = 5.0
-
-        # Page 31 correct list - to pass admin checkpoint
-        # ChilliPepper, StarGazer, SilverSurfer, BlackPearl, SilverFox, RedRose, traveller_mike, photographer_paul, monkey_mike
-        CORRECT_HIGH_IDS = [11, 13, 18, 66, 68, 69, 96, 115, 143]
-        # RedRose duplicate handle: only ID 69 should be HIGH
-        if username == "RedRose" and user_id!= 69:
-            return combined
-
-        if user_id in CORRECT_HIGH_IDS:
-            # Ensure these 9 show as HIGH=5.0 on /admin as per slide
-            if combined >= 3.0 or is_new_account or len(posts) > 0:
-                return 5.0
-
-        return combined
+        # Step 6 - final cap
+        return min(MAX_USER_RISK, user_risk_score)
 
     except Exception as e:
-        print(e)
+        print(f"user_risk_analysis error: {e}")
         return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Design Claim 20 (Chapter 4): "Offering people reminders at the point of an
+# action that may violate norms reduces the number of offenses."
+#
+# When a user submits a post or comment that the moderation rules would censor
+# or flag, the content is NOT saved straight away. Instead the user sees a
+# reminder that lists which rules would be triggered, how the text would look
+# after moderation, and can: edit the text and re-check it, post it anyway, or
+# cancel. Clean content is saved immediately, as before.
+# ---------------------------------------------------------------------------
+REMINDER_TEMPLATE = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Before you {{ action_word }} - Mini Social</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f4f5f7; margin:0; padding:24px; }
+    .box { max-width:640px; margin:0 auto; background:#fff; border:2px solid #f0ad4e;
+           border-radius:10px; padding:24px; }
+    h2 { margin-top:0; }
+    .preview { background:#f8f9fa; border-left:4px solid #6c757d; padding:10px 14px;
+               border-radius:4px; white-space:pre-wrap; }
+    textarea { width:100%; box-sizing:border-box; min-height:110px; padding:8px; font:inherit; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; align-items:center; }
+    button, a.cancel { padding:8px 16px; border-radius:6px; border:1px solid #888;
+                       font:inherit; cursor:pointer; text-decoration:none; color:#000; background:#eee; }
+    button.primary { background:#0d6efd; color:#fff; border-color:#0d6efd; }
+    button.warn { background:#fff; color:#b02a37; border-color:#b02a37; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>&#9888; Before you {{ action_word }}...</h2>
+    <p>Our community rules would act on this {{ item_word }}:</p>
+    <ul>
+      {% for r in reasons %}<li>{{ r }}</li>{% endfor %}
+    </ul>
+    <p><b>How it would appear to others:</b></p>
+    <div class="preview">{{ preview }}</div>
+    <p style="margin-top:18px"><b>Want to edit it first?</b></p>
+    <form method="POST" action="{{ action_url }}">
+      <textarea name="content" required>{{ content }}</textarea>
+      {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+      <div class="row">
+        <button type="submit" class="primary">Check my edit</button>
+        <button type="submit" name="confirm_submit" value="1" class="warn">{{ action_word|capitalize }} anyway</button>
+        <a class="cancel" href="{{ cancel_url }}">Cancel</a>
+      </div>
+    </form>
+    <p style="font-size:12px;color:#666">See the full <a href="{{ url_for('rules') }}">community rules</a>.</p>
+  </div>
+</body>
+</html>
+"""
+
+
+def _safe_next_url(url):
+    """Only allow redirects back to this same site (prevents open redirects)."""
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.netloc and parsed.netloc != request.host:
+        return None
+    return url
+
+
+def norm_reminder(content, action_url, action_word, item_word, fallback_url):
+    """
+    Design Claim 20 helper. Returns a rendered reminder page when the content would
+    trigger a moderation rule and the user has not confirmed yet, otherwise None.
+    """
+    filtered, _score, reasons = analyze_content(content)
+    if not reasons or request.form.get('confirm_submit') == '1':
+        return None
+    next_url = _safe_next_url(request.form.get('next') or request.referrer)
+    return render_template_string(
+        REMINDER_TEMPLATE,
+        reasons=reasons, preview=filtered, content=content,
+        action_url=action_url, action_word=action_word, item_word=item_word,
+        next_url=next_url, cancel_url=next_url or fallback_url)
+
+
 def recommend(user_id, filter_following):
     if not user_id:
         return query_db('SELECT p.id, p.content, p.created_at, u.username FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 5')
