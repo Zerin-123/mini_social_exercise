@@ -22,6 +22,59 @@
 </div>
 {% endif %}
 
+{% if session.get('user_id') and newcomer_panel %}
+<div class="col-md-8 mx-auto">
+  <!-- C5 Claim 19: newcomers are encouraged to introduce themselves
+       C5 Claim 18: newcomers see the friendly replies they receive soon after joining -->
+  <div class="card mb-4 border-warning">
+    <div class="card-body">
+      <h5>👋 Welcome to MiniSocial, {{ session.get('username') }}! (C5-Claims 18 &amp; 19)</h5>
+      {% if not newcomer_panel.has_intro %}
+        <p class="mb-2">Members can only say hello when they know something about you. Tell the community who you are!</p>
+        <a href="{{ url_for('introductions_page') }}" class="btn btn-warning">Introduce yourself</a>
+      {% else %}
+        <p class="text-success mb-2">✓ You introduced yourself.</p>
+      {% endif %}
+      {% if newcomer_panel.welcomes %}
+        <hr>
+        <h6>Members who welcomed you ({{ newcomer_panel.welcomes|length }})</h6>
+        {% for w in newcomer_panel.welcomes %}
+          <div class="mb-2"><b>{{ w.username }}:</b> {{ w.content }}
+            <a href="{{ url_for('post_detail', post_id=w.post_id) }}" class="btn btn-sm btn-outline-secondary ms-2">Reply</a>
+          </div>
+        {% endfor %}
+      {% elif newcomer_panel.has_intro %}
+        <p class="text-muted mb-0">No welcome yet - members will say hello soon.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if session.get('user_id') and welcome_desk %}
+<div class="col-md-8 mx-auto">
+  <!-- C5 Claim 18: old-timers have friendly interactions with newcomers soon after they join -->
+  <div class="card mb-4 border-success">
+    <div class="card-body">
+      <h5>🤝 Welcome Desk (C5-Claim 18)</h5>
+      <small class="text-muted">New members (joined in the last {{ newcomer_days }} days) who have not heard from you yet. Edit the message and send it!</small>
+      <hr>
+      {% for n in welcome_desk %}
+        <div class="mb-3">
+          <b>{{ n.username }}</b>{% if n.location %} <span class="text-muted">· {{ n.location }}</span>{% endif %}
+          <span class="badge bg-info">{{ n.welcome_count }} welcome{{ '' if n.welcome_count == 1 else 's' }} so far</span>
+          <div class="small text-muted">"{{ n.preview }}"</div>
+          <form action="{{ url_for('welcome_newcomer', newcomer_id=n.id) }}" method="POST" class="mt-1">
+            <textarea name="message" class="form-control mb-2" rows="2" maxlength="{{ welcome_max_length }}" required>{{ n.suggestion }}</textarea>
+            <button type="submit" class="btn btn-sm btn-success">Send welcome</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if session.get('user_id') %}
 <div class="col-md-8 mx-auto">
   <!-- C2 Claim 1: easily visible list of needed contributions
@@ -189,6 +242,7 @@
       </div>
 
       <p class="mt-2">{{ entry.post.content }}</p>
+      {% if entry.post.reason %}<small class="text-muted">💡 {{ entry.post.reason }}</small>{% endif %}
 
       <!-- Reactions Display and Add Reaction Button -->
       <div class="d-flex align-items-center mt-2 mb-2">
