@@ -115,7 +115,7 @@ def feed():
 
     db = get_db()
 
-    # --- STEP 1: C2 Claim 1 + C2 Claim 12 (Needs Your Contribution - Fixed with NOT EXISTS) ---
+    # --- STEP 1: C2 Claim 1 + C2 Claim 12 (Needs Your Contribution) ---
     if current_user_id:
         try:
             pending_from = """
@@ -150,7 +150,7 @@ def feed():
             needs_attention = []
             needs_attention_total = 0
 
-    # --- STEP 2: C2 Claim 12 (Active Today - Strictly Today & Reactions Made by User) ---
+    # --- STEP 2: C2 Claim 12 (Active Today) ---
     try:
         rows = db.execute("""
             SELECT username, posts, comments, reactions FROM (
@@ -655,17 +655,18 @@ def follow_user(user_id):
         flash("You cannot follow yourself.", "warning")
         return redirect(request.referrer or url_for('feed'))
 
-    user_to_follow = query_db('SELECT id FROM users WHERE id = ?', (user_id,), one=True)
+    user_to_follow = query_db('SELECT id, username FROM users WHERE id = ?', (user_id,), one=True)
     if not user_to_follow:
         flash("The user you are trying to follow does not exist.", "danger")
         return redirect(request.referrer or url_for('feed'))
+
+    username_to_follow = user_to_follow['username']
 
     db = get_db()
     try:
         db.execute('INSERT INTO follows (follower_id, followed_id) VALUES (?, ?)',
                    (follower_id, user_id))
         db.commit()
-        username_to_follow = query_db('SELECT username FROM users WHERE id = ?', (user_id,), one=True)['username']
         flash(f"You are now following {username_to_follow}.", "success")
     except sqlite3.IntegrityError:
         flash("You are already following this user.", "info")
@@ -680,13 +681,19 @@ def unfollow_user(user_id):
         flash("You must be logged in to unfollow users.", "danger")
         return redirect(url_for('login'))
 
+    user_to_unfollow = query_db('SELECT id, username FROM users WHERE id = ?', (user_id,), one=True)
+    if not user_to_unfollow:
+        flash("The user does not exist.", "danger")
+        return redirect(request.referrer or url_for('feed'))
+
+    username_unfollowed = user_to_unfollow['username']
+
     db = get_db()
     cur = db.execute('DELETE FROM follows WHERE follower_id = ? AND followed_id = ?',
                      (follower_id, user_id))
     db.commit()
 
     if cur.rowcount > 0:
-        username_unfollowed = query_db('SELECT username FROM users WHERE id = ?', (user_id,), one=True)['username']
         flash(f"You have unfollowed {username_unfollowed}.", "success")
     else:
         flash("You were not following this user.", "info")
