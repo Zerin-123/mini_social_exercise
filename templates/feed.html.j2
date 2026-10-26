@@ -48,7 +48,7 @@
               <form action="{{ url_for('add_reaction') }}" method="POST" class="d-inline">
                 <input type="hidden" name="post_id" value="{{ item.id }}">
                 <input type="hidden" name="reaction" value="{{ reaction_types[0] }}">
-                <button type="submit" class="btn btn-sm btn-outline-primary">{{ reaction_emojis.get(reaction_types[0]) }} {{ reaction_types[0]|capitalize }}</button>
+                <button type="submit" class="btn btn-sm btn-light border text-dark">{{ reaction_emojis.get(reaction_types[0]) }} {{ reaction_types[0]|capitalize }}</button>
               </form>
               <a href="/posts/{{ item.id }}" class="btn btn-sm btn-primary">Comment</a>
             </div>
@@ -69,6 +69,18 @@
       <h5>🔥 Active Today (C2-Claim 12)</h5>
       <small class="text-muted">Who contributed today (posts and comments written, reactions given)</small>
       <hr>
+      {% if session.get('user_id') and my_activity %}
+      <!-- Comparison: your contributions today vs. the average active member -->
+      <div class="mb-3">
+        <small>
+          You contributed <b>{{ my_activity.total }}</b> time(s) today.
+          Average of the {{ my_activity.active_count }} active member(s): <b>{{ my_activity.average }}</b>.
+        </small>
+        <div class="progress mt-1" style="height: 10px;">
+          <div class="progress-bar bg-success" role="progressbar" style="width: {{ my_activity.percent }}%;"></div>
+        </div>
+      </div>
+      {% endif %}
       {% if active_today %}
         {% for user in active_today %}
           <div class="d-flex justify-content-between align-items-center mb-2">
@@ -104,6 +116,15 @@
         <div class="text-end">
           <span class="badge bg-warning text-dark">{{ user.total_posts }} posts</span><br>
           <small style="font-size:10px">Last active: {{ user.last_active|datetimeformat }}</small>
+          {% if session.get('user_id') and not user.is_me %}
+          <!-- Interactive: follow/unfollow right from the card (existing routes).
+               Followed members' posts then appear in "Needs Your Contribution" (Claim 1). -->
+          <form action="{{ url_for('unfollow_user' if user.is_following else 'follow_user', user_id=user.user_id) }}" method="POST" class="mt-1">
+            <button type="submit" class="btn btn-sm {{ 'btn-light border text-dark' if user.is_following else 'btn-warning text-dark' }}">
+              {{ 'Unfollow' if user.is_following else 'Follow' }}
+            </button>
+          </form>
+          {% endif %}
         </div>
       </div>
       {% else %}
